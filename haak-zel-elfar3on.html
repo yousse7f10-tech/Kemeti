@@ -2,13 +2,13 @@
 <html lang="ar" dir="rtl">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>HAAK: ظل الفرعون — الفصل الأول: هضبة الجيزة</title>
 <style>
   * { margin:0; padding:0; box-sizing:border-box; }
   html,body { width:100%; height:100%; overflow:hidden; background:#0a0906; font-family:'Segoe UI', Tahoma, Arial, sans-serif; }
   #wrap { position:relative; width:100vw; height:100vh; display:flex; align-items:center; justify-content:center; }
-  canvas { background:#0a0906; box-shadow:0 0 60px rgba(0,0,0,.9); }
+  canvas { background:#0a0906; box-shadow:0 0 60px rgba(0,0,0,.9); touch-action:none; -webkit-user-select:none; user-select:none; }
   #hint { position:absolute; bottom:8px; left:12px; color:#7a6a45; font-size:12px; direction:rtl; pointer-events:none; user-select:none; }
 </style>
 </head>
@@ -16,6 +16,7 @@
 <div id="wrap">
   <canvas id="game" width="960" height="540"></canvas>
   <div id="hint">حركة: WASD / أسهم &nbsp;|&nbsp; قفز: مسطرة / W &nbsp;|&nbsp; الخطاف: كليك شمال على الوتد (سيب الماوس للتحرير) &nbsp;|&nbsp; هجوم: كليك يمين / E &nbsp;|&nbsp; وقفة: Esc</div>
+  <div id="rotate" style="display:none; position:fixed; inset:0; z-index:10; background:#0a0906; color:#f2df9a; align-items:center; justify-content:center; font-size:22px; direction:rtl; text-align:center;">↻ لفّ التلفون أفقي لتجربة أفضل</div>
 </div>
 <script>
 "use strict";
@@ -65,6 +66,90 @@ cv.addEventListener('mouseup', e => {
   if (e.button === 0) releaseHook();
 });
 cv.addEventListener('contextmenu', e => e.preventDefault());
+
+/* ---------- التحكم باللمس للموبايل ---------- */
+const touchMode = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0);
+const virt = { left:false, right:false, jump:false, atk:false };
+let lastTouchStart = 0;
+function btnZones(){
+  return {
+    left:  { x: 46,  y: H-76, r: 32 },
+    right: { x: 132, y: H-76, r: 32 },
+    jump:  { x: W-56,  y: H-76, r: 32 },
+    atk:   { x: W-142, y: H-76, r: 32 },
+    pause: { x: W-28, y: 136, r: 18 },
+  };
+}
+function inBtn(z, x, y){ return Math.hypot(x - z.x, y - z.y) < z.r + 14; }
+function canvasPos(t){
+  const r = cv.getBoundingClientRect();
+  return { x: (t.clientX - r.left)/scale, y: (t.clientY - r.top)/scale };
+}
+const activeTouches = {};
+cv.addEventListener('touchstart', e => {
+  e.preventDefault();
+  for (const t of e.changedTouches){
+    const pt = canvasPos(t);
+    const rec = { x: pt.x, y: pt.y, lastY: pt.y, btn: null };
+    activeTouches[t.identifier] = rec;
+    if (G.state !== 'play'){
+      if (G.state === 'menu' || G.state === 'dead' || G.state === 'win') startGame();
+      else if (G.state === 'pause') G.state = 'play';
+      continue;
+    }
+    if (Date.now() - lastTouchStart < 60){ rec.ignored = true; continue; }
+    lastTouchStart = Date.now();
+    const z = btnZones();
+    if (inBtn(z.left, pt.x, pt.y)){ virt.left = true; rec.btn = 'left'; }
+    else if (inBtn(z.right, pt.x, pt.y)){ virt.right = true; rec.btn = 'right'; }
+    else if (inBtn(z.jump, pt.x, pt.y)){ virt.jump = true; rec.btn = 'jump'; }
+    else if (inBtn(z.atk, pt.x, pt.y)){ virt.atk = true; doAttack(); rec.btn = 'atk'; }
+    else if (inBtn(z.pause, pt.x, pt.y)){ G.state = 'pause'; }
+    else if (player.hook.state === 'idle' && player.hook.cd <= 0){
+      mouse.x = pt.x; mouse.y = pt.y;
+      shootHook();
+    }
+  }
+}, {passive:false});
+cv.addEventListener('touchmove', e => {
+  e.preventDefault();
+  for (const t of e.changedTouches){
+    const rec = activeTouches[t.identifier];
+    if (!rec) continue;
+    const pt = canvasPos(t);
+    const z = btnZones();
+    if (rec.btn === 'left')  { if (!inBtn(z.left, pt.x, pt.y))  virt.left = false; }
+    if (rec.btn === 'right') { if (!inBtn(z.right, pt.x, pt.y)) virt.right = false; }
+    if (rec.btn === 'jump')  { if (!inBtn(z.jump, pt.x, pt.y))  virt.jump = false; }
+    if (rec.btn === null && !rec.ignored && player.hook.state === 'stuck'){
+      player.hook.len = Math.max(40, Math.min(player.hook.maxLen, player.hook.len + (pt.y - rec.lastY)*0.7));
+      mouse.x = pt.x; mouse.y = pt.y;
+    }
+    rec.x = pt.x; rec.y = pt.y; rec.lastY = pt.y;
+  }
+}, {passive:false});
+function endTouch(e){
+  e.preventDefault();
+  for (const t of e.changedTouches){
+    const rec = activeTouches[t.identifier];
+    if (!rec) continue;
+    if (rec.btn === 'left')  virt.left = false;
+    if (rec.btn === 'right') virt.right = false;
+    if (rec.btn === 'jump')  virt.jump = false;
+    if (rec.btn === 'atk')   virt.atk = false;
+    if (rec.btn === null && !rec.ignored) releaseHook();
+    delete activeTouches[t.identifier];
+  }
+}
+cv.addEventListener('touchend', endTouch, {passive:false});
+cv.addEventListener('touchcancel', endTouch, {passive:false});
+if (touchMode){
+  document.getElementById('hint').style.display = 'none';
+  const rotateEl = document.getElementById('rotate');
+  const checkOrient = () => { rotateEl.style.display = (innerHeight > innerWidth) ? 'flex' : 'none'; };
+  addEventListener('resize', checkOrient);
+  checkOrient();
+}
 
 /* ---------- أدوات ---------- */
 const clamp = (v,a,b) => Math.max(a, Math.min(b, v));
@@ -264,15 +349,15 @@ function update(){
 
   /* حركة أفقية */
   let mv = 0;
-  if (keys['KeyA']||keys['ArrowLeft'])  mv -= 1;
-  if (keys['KeyD']||keys['ArrowRight']) mv += 1;
+  if (keys['KeyA']||keys['ArrowLeft']||virt.left)  mv -= 1;
+  if (keys['KeyD']||keys['ArrowRight']||virt.right) mv += 1;
   const hooking = p.hook.state === 'stuck';
   if (mv !== 0){ p.vx += mv * (hooking ? 0.35 : 0.7); p.dir = mv; }
   else if (p.onGround && !hooking) p.vx *= 0.72;
   if (!hooking) p.vx = clamp(p.vx, -5.4, 5.4);
 
   /* قفز */
-  const wantJump = keys['Space']||keys['KeyW']||keys['ArrowUp'];
+  const wantJump = keys['Space']||keys['KeyW']||keys['ArrowUp']||virt.jump;
   if (wantJump){
     if ((p.onGround || p.coyote > 0) && !p.jumpHeld){
       p.vy = -11.5; p.onGround=false; p.coyote=0; p.jumpHeld=true; sfx('jump');
@@ -905,6 +990,38 @@ function drawHUD(){
   ctx.fillStyle='#4ecb9c';
   ctx.beginPath(); ctx.arc(mx + (p.x/LEVEL.width)*mw, my+mh/2, 3, 0, 6.28); ctx.fill();
 
+  drawTouchControls();
+
+  ctx.restore();
+}
+
+function drawTouchControls(){
+  if (!touchMode || G.state === 'menu') return;
+  const z = btnZones();
+  const draw = (b, label, active) => {
+    ctx.save();
+    ctx.globalAlpha = active ? 0.6 : 0.32;
+    ctx.beginPath(); ctx.arc(b.x, b.y, b.r, 0, 6.28);
+    ctx.fillStyle = '#1a1410'; ctx.fill();
+    ctx.strokeStyle = '#c8a13e'; ctx.lineWidth = 2; ctx.stroke();
+    ctx.globalAlpha = active ? 0.95 : 0.7;
+    ctx.fillStyle = '#f2df9a';
+    ctx.font = 'bold 22px sans-serif';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(label, b.x, b.y + 1);
+    ctx.restore();
+  };
+  draw(z.left, '◀', virt.left);
+  draw(z.right, '▶', virt.right);
+  draw(z.jump, '⤒', virt.jump);
+  draw(z.atk, '⚔', virt.atk);
+  ctx.save();
+  ctx.globalAlpha = 0.55;
+  ctx.strokeStyle = '#c8a13e'; ctx.lineWidth = 2;
+  ctx.strokeRect(z.pause.x-15, z.pause.y-15, 30, 30);
+  ctx.fillStyle = '#f2df9a';
+  ctx.fillRect(z.pause.x-9, z.pause.y-8, 6, 16);
+  ctx.fillRect(z.pause.x+3, z.pause.y-8, 6, 16);
   ctx.restore();
 }
 
@@ -936,6 +1053,14 @@ function drawMenu(){
   ctx.fillText('اجمع 3 شظايا قلب رع، هزم حارس الحجر، واخرج من البوابة الشرقية', W/2, H-66);
   if (G.best>0){ ctx.fillStyle='#9a845c'; ctx.fillText('أفضل نتيجة: '+G.best, W/2, H-40); }
   ctx.restore();
+  if (touchMode){
+    ctx.save();
+    ctx.textAlign='center';
+    ctx.font='13px sans-serif'; ctx.fillStyle='#7a6a45';
+    ctx.fillText('امسح الشاشة للبدء — المس أي مكان لإطلاق الخطاف ناحيته', W/2, H-80);
+    ctx.fillText('اسحب لأعلى أو لأسفل وأنت معلّق للتحكم في الحبل', W/2, H-56);
+    ctx.restore();
+  }
 }
 function drawPause(){
   ctx.save();
